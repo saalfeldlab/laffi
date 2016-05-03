@@ -3,19 +3,6 @@
 	<modelVersion>4.0.0</modelVersion>
   <artifactId>laffi</artifactId>
   <version>0.0.1-SNAPSHOT</version>
-  <build>
-    <sourceDirectory>src</sourceDirectory>
-    <plugins>
-      <plugin>
-        <artifactId>maven-compiler-plugin</artifactId>
-        <version>3.1</version>
-        <configuration>
-          <source/>
-          <target/>
-        </configuration>
-      </plugin>
-    </plugins>
-  </build>
   <parent>
   	<groupId>sc.fiji</groupId>
   	<artifactId>pom-fiji</artifactId>
