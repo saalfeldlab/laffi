@@ -9,19 +9,27 @@ import ij.IJ;
 import ij.ImagePlus;
 import net.imglib2.Cursor;
 import net.imglib2.FinalInterval;
+import net.imglib2.Interval;
 import net.imglib2.RandomAccess;
 import net.imglib2.RandomAccessible;
 import net.imglib2.RandomAccessibleInterval;
+import net.imglib2.RealRandomAccess;
 import net.imglib2.RealRandomAccessible;
+import net.imglib2.exception.ImgLibException;
 import net.imglib2.img.Img;
 import net.imglib2.img.display.imagej.ImageJFunctions;
+import net.imglib2.img.imageplus.ImagePlusImg;
+import net.imglib2.img.imageplus.ImagePlusImgFactory;
 import net.imglib2.interpolation.randomaccess.NLinearInterpolatorFactory;
 import net.imglib2.realtransform.RealViews;
 import net.imglib2.realtransform.ScanLineXCorrectionRealTransform;
+import net.imglib2.type.NativeType;
+import net.imglib2.type.numeric.NumericType;
 import net.imglib2.type.numeric.RealType;
 import net.imglib2.type.numeric.integer.UnsignedShortType;
 import net.imglib2.util.Pair;
 import net.imglib2.view.IntervalView;
+import net.imglib2.view.MixedTransformView;
 import net.imglib2.view.Views;
 
 
@@ -34,22 +42,32 @@ import net.imglib2.view.Views;
 public class ScanLineArtifactCorrection
 {
 
-	public static void main( String[] args )
+	final protected int searchRadius;
+	double estimatedShift;
+
+	public ScanLineArtifactCorrection()
 	{
+		this( 3 );
+	}
 
-		String f = "/groups/flyfuncconn/flyfuncconn-public/forJohn/r3_ss2483lc10_frup65/20160301_r3_ss2483lc10_frup65_rnai_flyb_00002_regression/20160301_r3_ss2483lc10_frup65_rnai_flyb_00002_baseline.tif";
-		String fout = "/groups/saalfeld/home/bogovicj/tmp/scanline/corrected_b_0002.tif";
+	public ScanLineArtifactCorrection( final int searchRadius )
+	{
+		this.searchRadius = searchRadius;
+	}
 
-		int maxOffset = 3;
+	public double getEstimatedShift()
+	{
+		return estimatedShift;
+	}
 
-		ImagePlus ip = IJ.openImage( f );
-		Img<UnsignedShortType> img = ImageJFunctions.wrap( ip );
+	public <T extends RealType< T >> RandomAccessibleInterval< T > process(
+			RandomAccessibleInterval< T > img )
+	{
+		RealRandomAccessible< T > imgr = 
+				Views.interpolate( Views.extendZero( img ), new NLinearInterpolatorFactory< T >() );
 
-		RealRandomAccessible< UnsignedShortType > imgr = 
-				Views.interpolate( Views.extendZero( img ), new NLinearInterpolatorFactory< UnsignedShortType >() );
-
-		int startOffset = -maxOffset;
-		int endOffset   =  maxOffset;
+		int startOffset = -searchRadius;
+		int endOffset   =  searchRadius;
 
 		int numOffsets = endOffset - startOffset + 1;
 		
@@ -58,28 +76,46 @@ public class ScanLineArtifactCorrection
 		double[] offsetList = new double[ numOffsets ];
 		for( int offset = startOffset; offset <= endOffset; offset += 1 )
 		{
-			
-			System.out.println( "offset: " + offset );
 			double ssd = Double.MAX_VALUE;
 			ScanLineXCorrectionRealTransform xfm = new ScanLineXCorrectionRealTransform( 3, offset, 0 );
-			IntervalView< UnsignedShortType > rraCor = Views.interval( Views.raster( RealViews.transform( imgr, xfm )), img );
+			IntervalView< T > rraCor = Views.interval( Views.raster( RealViews.transform( imgr, xfm )), img );
 			ssd = measureSSDByLines( rraCor );
 
 			offsetList[ i ] = offset;
 			ssdList[ i++ ] = ssd;
 		}
 
-		double[] evenOddOffsets = estimateSubPixelOffsets( ssdList, offsetList );
-		//System.out.println( "evenOddOffsets: " + evenOddOffsets[ 0 ] + " " + evenOddOffsets[ 1 ]  );
-		
-		ScanLineXCorrectionRealTransform xfm = new ScanLineXCorrectionRealTransform( 3, evenOddOffsets[0], evenOddOffsets[1] );
-		IntervalView< UnsignedShortType > rraCor = Views.interval( Views.raster( RealViews.transform( imgr, xfm )), img );
+		estimatedShift = estimateSubPixelOffsets( ssdList, offsetList );
+		System.out.println( "estimated offset: " + estimatedShift );
 
-		ImagePlus ipCorrected = ImageJFunctions.wrap( rraCor, "corrected" );
+		double[] evenOddOffsets = new double[]{ estimatedShift/2, -estimatedShift/2 };
+		ScanLineXCorrectionRealTransform xfm = new ScanLineXCorrectionRealTransform( 3, evenOddOffsets[0], evenOddOffsets[1] );
+		IntervalView< T > corrected = Views.interval( Views.raster( RealViews.transform( imgr, xfm )), img );
+
+		return corrected;
+	}
+
+	public static void main( String[] args )
+	{
+
+//		String f = "/groups/flyfuncconn/flyfuncconn-public/forJohn/r3_ss2483lc10_frup65/20160301_r3_ss2483lc10_frup65_rnai_flyb_00002_regression/20160301_r3_ss2483lc10_frup65_rnai_flyb_00002_baseline.tif";
+//		String fout = "/groups/saalfeld/home/bogovicj/tmp/scanline/corrected_b_0002.tif";
+		String f = args[ 0 ];
+		String fout = args[ 1 ];
+
+		int maxOffset = 3;
+		if( args.length >= 3 )
+			maxOffset = Integer.parseInt( args[ 2 ] );
+
+		ImagePlus ip = IJ.openImage( f );
+		Img<UnsignedShortType> img = ImageJFunctions.wrap( ip );
+
+		ScanLineArtifactCorrection alg = new ScanLineArtifactCorrection( maxOffset );
+		ImagePlus ipCorrected = ImageJFunctions.wrap( alg.process( img ), "corrected" );
 		IJ.save( ipCorrected, fout );
 	}
-	
-	public static double[] estimateSubPixelOffsets( double[] ssds, double[] offsets )
+
+	public static double estimateSubPixelOffsets( double[] ssds, double[] offsets )
 	{
 		// fit a quadratic to these data points and find the minimum
 		int rows = ssds.length;
@@ -98,9 +134,7 @@ public class ScanLineArtifactCorrection
 		
 		// now x stores our estimate of a quadratic: find the minimum
 		double min = -x.get( 1 ) / ( 2 * x.get( 2 ));
-		System.out.println( "best offset: " + min );
-		double[] out = new double[]{ min/2, -min/2 };
-		return out;
+		return min;
 	}
 
 	public static <T extends RealType<T>> double measureSSDByLines( RandomAccessibleInterval<T> rai )
@@ -110,7 +144,7 @@ public class ScanLineArtifactCorrection
 		long[] steps = new long[ nd ];
 		Arrays.fill( steps, 1 );
 		steps[ 1 ] = 2;
-		
+
 		long[] min = new long[ nd ];
 		long[] max = new long[ nd ];
 		long[] maxt = new long[ nd ];
@@ -149,7 +183,7 @@ public class ScanLineArtifactCorrection
 
 		return ssd;
 	}
-	
+
 	/**
 	 * For debugging purposes.  Prints all x to System.out for a given y and z.
 	 * 
@@ -167,6 +201,83 @@ public class ScanLineArtifactCorrection
 			ra.setPosition( x, 0 );
 			System.out.println( ra.get().getRealDouble() );
 		}
+	}
+
+	public static < T extends NumericType< T > & NativeType< T > > ImagePlus copyToImageStack( final RandomAccessible< T > rai, final Interval itvl )
+	{
+		// A bit of hacking to make slices the 4th dimension and channels the 3rd
+		// since that's how ImagePlusImgFactory does it
+
+		RandomAccessible< T > raiIn;
+		Interval intervalIn;
+		if( rai.numDimensions() == 3 )
+		{
+			raiIn = Views.addDimension( rai );
+			long[] min = new long[ 4 ];
+			long[] max = new long[ 4 ];
+			itvl.min( min );
+			itvl.max( max );
+			intervalIn = new FinalInterval( min, max );
+		}
+		else
+		{
+			raiIn = rai;
+			intervalIn = itvl;
+		}
+
+		MixedTransformView< T > raip = Views.permute( raiIn, 2, 3 );
+
+		final long[] dimensions = new long[ intervalIn.numDimensions() ];
+		for( int d = 0; d < intervalIn.numDimensions(); d++ )
+		{
+			if( d == 2 )
+				dimensions[ d ] = intervalIn.dimension( 3 );
+			else if( d == 3 )
+				dimensions[ d ] = intervalIn.dimension( 2 );
+			else
+				dimensions[ d ] = intervalIn.dimension( d );
+		}
+
+		// create the image plus image
+		final T t = rai.randomAccess().get();
+		final ImagePlusImgFactory< T > factory = new ImagePlusImgFactory< T >();
+		final ImagePlusImg< T, ? > target = factory.create( dimensions, t );
+
+		long[] dims = new long[ target.numDimensions() ];
+		target.dimensions( dims );
+
+		double k = 0;
+		long N = 1;
+		for ( int i = 0; i < itvl.numDimensions(); i++ )
+			N *= dimensions[ i ];
+
+		final net.imglib2.Cursor< T > c = target.cursor();
+
+		final RandomAccess< T > ra = raip.randomAccess();
+		while ( c.hasNext() )
+		{
+			c.fwd();
+			ra.setPosition( c );
+			c.get().set( ra.get() );
+
+			if ( k % 10000 == 0 )
+			{
+				IJ.showProgress( k / N );
+			}
+			k++;
+		}
+
+		IJ.showProgress( 1.1 );
+		try
+		{
+			return target.getImagePlus();
+		}
+		catch ( final ImgLibException e )
+		{
+			e.printStackTrace();
+		}
+
+		return null;
 	}
 
 }
